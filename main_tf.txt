@@ -1,0 +1,152 @@
+locals {
+  config = var.environments[var.environment]
+}
+
+resource "azurerm_resource_group" "rg" {
+  for_each = local.config.vm_name
+  name     = "${each.value}-rg-${var.environment}"
+  location = local.config.location
+
+  lifecycle {
+    prevent_destroy = true
+  }
+}
+
+resource "azurerm_virtual_network" "vnet" {
+  for_each            = local.config.vm_name
+  name                = "${each.value}-vnet"
+  address_space       = ["10.0.0.0/16"]
+  location            = azurerm_resource_group.rg[each.key].location
+  resource_group_name = azurerm_resource_group.rg[each.key].name
+}
+
+resource "azurerm_subnet" "subnet" {
+  for_each             = local.config.vm_name
+  name                 = "${each.value}-subnet"
+  resource_group_name  = azurerm_resource_group.rg[each.key].name
+  virtual_network_name = azurerm_virtual_network.vnet[each.key].name
+  address_prefixes     = ["10.0.1.0/24"]
+}
+
+resource "azurerm_network_security_group" "nsg" {
+  for_each            = local.config.vm_name
+  name                = "${each.value}-nsg"
+  location            = azurerm_resource_group.rg[each.key].location
+  resource_group_name = azurerm_resource_group.rg[each.key].name
+
+  security_rule {
+    name                       = "AllowSSH"
+    priority                   = 1001
+    direction                  = "Inbound"
+    access                     = "Allow"
+    protocol                   = "Tcp"
+    source_port_range          = "*"
+    destination_port_range     = "22"
+    source_address_prefix      = "*"
+    destination_address_prefix = "*"
+  }
+
+  security_rule {
+    name                       = "AllowDNS"
+    priority                   = 1002
+    direction                  = "Outbound"
+    access                     = "Allow"
+    protocol                   = "Udp"
+    source_port_range          = "*"
+    destination_port_ranges    = ["53"]
+    source_address_prefix      = "*"
+    destination_address_prefix = "*"
+  }
+
+  security_rule {
+    name                       = "AllowHTTP"
+    priority                   = 1003
+    direction                  = "Outbound"
+    access                     = "Allow"
+    protocol                   = "Tcp"
+    source_port_range          = "*"
+    destination_port_ranges    = ["80"]
+    source_address_prefix      = "*"
+    destination_address_prefix = "*"
+  }
+
+  security_rule {
+    name                       = "AllowHTTPS"
+    priority                   = 1004
+    direction                  = "Outbound"
+    access                     = "Allow"
+    protocol                   = "Tcp"
+    source_port_range          = "*"
+    destination_port_ranges    = ["443"]
+    source_address_prefix      = "*"
+    destination_address_prefix = "*"
+  }
+}
+
+resource "azurerm_network_interface" "nic" {
+  for_each               = local.config.vm_name
+  name                   = "${each.value}-nic"
+  location               = azurerm_resource_group.rg[each.key].location
+  resource_group_name    = azurerm_resource_group.rg[each.key].name
+  network_security_group = azurerm_network_security_group.nsg[each.key].id
+
+  ip_configuration {
+    name                          = "${each.value}-ipconfig"
+    subnet_id                     = azurerm_subnet.subnet[each.key].id
+    private_ip_address_allocation = "Dynamic"
+  }
+}
+
+resource "azurerm_virtual_machine" "vm" {
+  for_each              = local.config.vm_name
+  name                  = each.value
+  location              = azurerm_resource_group.rg[each.key].location
+  resource_group_name   = azurerm_resource_group.rg[each.key].name
+  network_interface_ids = [azurerm_network_interface.nic[each.key].id]
+  vm_size               = local.config.vm_size
+
+  storage_os_disk {
+    name              = "${each.value}-osdisk"
+    caching           = "ReadWrite"
+    create_option     = "FromImage"
+    managed_disk_type = "Standard_LRS"
+  }
+
+  os_profile {
+    computer_name  = each.value
+    admin_username = local.config.admin_username
+    admin_password = local.config.admin_password
+  }
+
+  os_profile_windows_config {
+    enable_automatic_upgrades = true
+  }
+
+  source_image_reference {
+    publisher = "MicrosoftWindowsServer"
+    offer     = "WindowsServer"
+    sku       = "2019-Datacenter"
+    version   = "latest"
+  }
+
+  lifecycle {
+    prevent_destroy = true
+  }
+}
+
+resource "azurerm_backup_protected_vm" "backup" {
+  for_each                = local.config.vm_name
+  resource_group_name     = azurerm_resource_group.rg[each.key].name
+  recovery_vault_name     = "${each.value}-recovery-vault"
+  source_vm_id            = azurerm_virtual_machine.vm[each.key].id
+  backup_policy_id        = azurerm_backup_policy_vm.standard.id
+}
+
+resource "azurerm_backup_policy_vm" "standard" {
+  name                  = "standard-backup-policy"
+  resource_group_name   = azurerm_resource_group.rg[each.key].name
+  recovery_vault_name   = "${each.value}-recovery-vault"
+  retention_daily {
+    count = local.config.backup_retention_days
+  }
+}

@@ -1,0 +1,9 @@
+terraform/
+  ├── main.tf
+  ├── variables.tf
+  ├── outputs.tf
+  ├── provider.tf
+  ├── environments/
+      ├── test.tfvars
+      ├── staging.tfvars
+      ├── production.tfvars

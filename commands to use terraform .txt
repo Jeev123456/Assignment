@@ -1,0 +1,9 @@
+terraform init
+terraform plan -var-file="environments/test.tfvars"
+terraform apply -var-file="environments/test.tfvars"
+
+terraform plan -var-file="environments/staging.tfvars"
+terraform apply -var-file="environments/staging.tfvars"
+
+terraform plan -var-file="environments/production.tfvars"
+terraform apply -var-file="environments/production.tfvars"
